@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"sort"
 
 	//"io"
 	"net/url"
@@ -203,30 +204,42 @@ func sameDomain(baseURL, otherURL string) bool {
 	return false
 }
 
-func crawlPage(rawBaseURL, rawCurrentURL string, pages map[string]int) {
+func (cfg *config) checkMaxPages() bool {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+	return len(cfg.pages) >= cfg.maxPages
+}
 
-	if !sameDomain(rawBaseURL, rawCurrentURL) {
+func (cfg *config) crawlPage(rawCurrentURL string) {
+	defer cfg.wg.Done()
+	cfg.concurrencyControl <- struct{}{}
+	defer func() {
+		<-cfg.concurrencyControl
+	}()
+
+	if cfg.checkMaxPages() {
+		return
+	}
+
+	if !sameDomain(cfg.baseURL, rawCurrentURL) {
 		return
 	}
 
 	normURL := normalizeURL(rawCurrentURL)
 
-	if _, ok := pages[normURL]; ok {
-		pages[normURL]++
+	if !cfg.addPageVisit(normURL) {
 		return
-	} else {
-		pages[normURL] = 1
 	}
 
-	fmt.Printf("Entering at URL %s\n\n", normURL)
+	fmt.Printf("Entering at URL %s\n", rawCurrentURL)
 	htmlText, err := getHTML(rawCurrentURL)
 
 	if err != nil {
-		fmt.Printf("The URL %s no responding: %v\n", normURL, err)
+		fmt.Printf("The URL %s not responding: %v\n", normURL, err)
 		return
 	}
 
-	allURLs, err := getURLsFromHTML(htmlText, rawBaseURL)
+	allURLs, err := getURLsFromHTML(htmlText, cfg.baseURL)
 
 	if len(allURLs) == 0 {
 		fmt.Printf("%v", err)
@@ -234,6 +247,54 @@ func crawlPage(rawBaseURL, rawCurrentURL string, pages map[string]int) {
 	}
 
 	for _, link := range allURLs {
-		crawlPage(rawBaseURL, link, pages)
+		cfg.wg.Add(1)
+		go cfg.crawlPage(link)
+	}
+}
+
+func (cfg *config) addPageVisit(normalizedURL string) bool {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+	_, ok := cfg.pages[normalizedURL]
+	if ok {
+		cfg.pages[normalizedURL]++
+		return false
+	} else {
+		cfg.pages[normalizedURL] = 1
+		return true
+	}
+}
+
+func (cfg *config) printReport() {
+	type LinkCount struct {
+		count int
+		link  string
+	}
+
+	linkList := []LinkCount{}
+
+	for link, val := range cfg.pages {
+		linkList = append(linkList, LinkCount{count: val, link: link})
+	}
+	sort.SliceStable(
+		linkList,
+		func(i, j int) bool {
+			return linkList[i].link < linkList[j].link
+		},
+	)
+
+	sort.SliceStable(
+		linkList,
+		func(i, j int) bool {
+			return linkList[i].count > linkList[j].count
+		},
+	)
+
+	fmt.Printf("\n\n\n=============================\n")
+	fmt.Printf("REPORT for %s\n", cfg.baseURL)
+	fmt.Printf("=============================\n\n\n")
+
+	for _, val := range linkList {
+		fmt.Printf("Found %d internal links to %s\n", val.count, val.link)
 	}
 }
