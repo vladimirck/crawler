@@ -16,7 +16,6 @@ type config struct {
 	wg                 *sync.WaitGroup
 	maxConcurrency     int
 	maxPages           int
-	isMaxPageReached   bool
 }
 
 func main() {

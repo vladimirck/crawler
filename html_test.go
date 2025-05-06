@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -788,15 +789,25 @@ func TestCrawlPage_InternalLinksOnly_SchemeLessNormalized(t *testing.T) {
 	// pageC is not defined, simulating empty/404
 
 	// --- Execute the Crawl ---
-	pages := make(map[string]int)
-	crawlPage(server.URL, server.URL, pages) // Start crawl from the base URL
+	c := config{
+		pages:              make(map[string]int),
+		baseURL:            server.URL,
+		maxConcurrency:     1,
+		maxPages:           100,
+		mu:                 &sync.Mutex{},
+		concurrencyControl: make(chan struct{}, 1),
+		wg:                 &sync.WaitGroup{},
+	}
+	c.wg.Add(1)
+	go c.crawlPage(server.URL) // Start crawl from the base URL
+	c.wg.Wait()
 
 	// --- Assertions ---
 	foundInternalKeys := make(map[string]bool)
 	foundMalformedKeys := make(map[string]bool) // Keys that don't seem to match expected format
 
 	t.Logf("--- Pages Map Contents (Expected Host:Port: %s) ---", expectedHostPort)
-	for k, v := range pages {
+	for k, v := range c.pages {
 		t.Logf("Key: %s, Count: %d", k, v)
 		// Check if the key starts with the expected host:port to categorize
 		// This assumes external URLs are correctly excluded *before* storing.
